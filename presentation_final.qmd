@@ -1,0 +1,383 @@
+---
+title: "Data Visualization of Life Expectancy and Social Economic"
+author: "Ruijie Li (B00894018), Junyuan Wu (B00836490), Zezhou Lu (B00887213)"
+date: "2025-04-16"
+format: 
+  revealjs:
+    theme: dark  # Built-in theme (options: default, dark, simple, sky, beige, serif, solarized, blood, moon, night, black, league, white)
+    background-color: "black"  # Custom background color
+    font-family: "Arial"  # Custom font
+    slide-number: true  # Show slide numbers
+---
+
+
+```{r,include=FALSE, message=FALSE, warning=FALSE}
+
+knitr::opts_chunk$set(echo = TRUE)
+options(repos = c(CRAN = "https://cloud.r-project.org"))
+install.packages(c("ggplot2", "dplyr", "sf", "rnaturalearth", "classInt", "cowplot", "kableExtra", "scales"))
+
+library(tidyverse)
+library(here)
+library(factoextra)
+library(kableExtra)
+library(ggplot2)
+library(dplyr)
+library(sf)
+library(rnaturalearth)
+library(ggrepel)
+library(knitr)
+library(scales)
+```
+
+
+
+## Introduction
+
+**Goal:** Find relationship between `Life Expectancy` and other parameters
+
+- Evaluate the effect of Health Expenditure and Sanitation on Life Expectancy across countries
+- Investigate the association between Health Expenditure and DALY
+
+
+## About our dataset
+
+![](logo.jpg){width=60%}
+
+  Dataset source: https://www.kaggle.com/code/soumikniloy/life-expectancy-socio-economic-world-bank.
+
+
+## Data Variables
+
+- `IncomeGroup`: High, Meidum, Low
+- `Life.Expectancy.World.Bank(Year)`: Life expectancy at birth (years) 
+- `CO2`: Carbon dioxide emissions (kiloton)
+- `Health.Expenditure`: Health spending (% of GDP) 
+- `Prevalence.of.Undernourishment`: undernourished population (%)
+- `Injuries`, `Communicable`, `NonCommunicable`: Adjusted Life Years(DALYs)
+
+
+## EDA Slide With Plot 
+
+**Load data**
+
+```{r,echo=FALSE,message=FALSE,warning=FALSE}
+df <- read.csv("life expectancy.csv", stringsAsFactors = FALSE)
+df$Corruption <- NULL # Remove the column with the most null values
+df <- na.omit(df)
+write.csv(df, "life_cleaned.csv", row.names = FALSE)
+data <- read.csv("life_cleaned.csv")
+head(data)
+```
+
+## 
+EDA: 1. Life Expectancy Comparison by Income Group
+
+```{r,echo=FALSE,message=FALSE,warning=FALSE}
+library(ggplot2)
+data$IncomeGroup <- factor(data$IncomeGroup,
+                           levels = c("High income", "Upper middle income", "Lower middle income", "Low income"))
+
+ggplot(data, aes(x = IncomeGroup, y = `Life.Expectancy.World.Bank`)) +
+  geom_boxplot(fill = "gold", color = "black") +
+  theme_minimal() +
+  labs(title = "Life Expectancy Comparison by Income Group",
+       x = "Income Group",
+       y = "Life Expectancy (World Bank)") +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+```
+
+##
+EDA: 2. Average Life Expectancy vs. Average CO2 Emission (2001-2019)
+
+```{r,echo=FALSE,message=FALSE,warning=FALSE}
+library(tidyverse)  # 也包含 dplyr、ggplot2 等多个常用包
+
+data_filtered <- data %>% 
+  filter(Year >= 2001 & Year <= 2019)
+
+data_agg <- data_filtered %>% 
+  group_by(Year) %>% 
+  summarise(avg_life_expectancy = mean(`Life.Expectancy.World.Bank`, na.rm = TRUE),
+            avg_CO2 = mean(CO2, na.rm = TRUE))
+
+ggplot(data_agg, aes(x = avg_CO2, y = avg_life_expectancy)) +
+  geom_point(alpha = 0.6, color = "tomato", size = 3) +
+  theme_minimal() +
+  labs(title = "Average Life Expectancy vs. Average CO2 Emission (2001-2019)",
+       x = "Average CO2 Emission",
+       y = "Average Life Expectancy (World Bank)")
+```
+
+## 
+EDA: 3. Histogram of Life Expectancy
+
+```{r,echo=FALSE,message=FALSE,warning=FALSE}
+data <- data %>% 
+  filter(!is.na(`Life.Expectancy.World.Bank`))
+
+set.seed(123)
+km <- kmeans(data$`Life.Expectancy.World.Bank`, centers = 3)
+centers <- km$centers
+
+ggplot(data, aes(x = `Life.Expectancy.World.Bank`)) +
+  geom_histogram(binwidth = 2, fill = "steelblue", color = "black") +
+  geom_vline(xintercept = centers, color = "red", linetype = "dashed", size = 1) +
+  geom_text(data = data.frame(x = centers), 
+            aes(x = x, y = 0, label = paste("Center", 1:length(centers))),
+            angle = 90, vjust = -0.5, color = "red") +
+  theme_minimal() +
+  labs(title = "Histogram of Life Expectancy",
+       x = "Life Expectancy (World Bank)",
+       y = "Frequency")
+```
+
+
+
+
+
+
+## Data Analysis
+
+1. PCA for Multivariate Patterns：Average Health and Sanitation Conditions for Different Countries (2001–2019)
+
+```{r,echo=FALSE,message=FALSE,warning=FALSE}
+library(ggrepel)
+
+df_avg <- df %>%
+  group_by(Country.Name) %>%
+  summarise(
+    avg_life_expectancy = mean(Life.Expectancy.World.Bank),
+    avg_health_expenditure = mean(Health.Expenditure..),
+    avg_sanitation = mean(Sanitation),
+    avg_undernourishment_rate = mean(Prevelance.of.Undernourishment),
+  )
+
+# PCA analsis except the non-quantitative variable country name
+pca <- prcomp(df_avg[, -1], center = TRUE, scale. = TRUE)
+
+# PC1 and PC2, add country name variable into new pca data set.
+pca_data <- as.data.frame(pca$x[, 1:2])
+pca_data$Country <- df_avg$Country.Name
+
+# Kmeans divided countries into into 3 clusters by pc1 and pc2
+set.seed(123)
+kcluster <- kmeans(pca_data[, c("PC1", "PC2")], centers = 3)
+# Add cluster column into pca data set
+pca_data$cluster <- as.factor(kcluster$cluster)
+
+explained_var <- summary(pca)$importance[2, 1:2]
+pc1_var <- round(explained_var[1] * 100, 2)
+pc2_var <- round(explained_var[2] * 100, 2)
+
+loadings <- as.data.frame(pca$rotation[, 1:2])
+loadings$varname <- rownames(loadings)
+loadings$PC1 <- loadings$PC1 * 3
+loadings$PC2 <- loadings$PC2 * 3
+
+ggplot(pca_data, aes(x = PC1, y = PC2, color = cluster, label = Country)) +
+  geom_point(size = 3, alpha = 0.6) +
+  geom_text_repel(size = 2.5) +
+  geom_segment(data = loadings,
+               aes(x = 0, y = 0, xend = PC1, yend = PC2),
+               arrow = arrow(length = unit(0.3, "cm")),
+               color = "red",
+               inherit.aes = FALSE) +
+  geom_text(data = loadings,
+            aes(x = PC1 * 1.1, y = PC2 * 1.1, label = varname),
+            color = "black", size = 4,
+            inherit.aes = FALSE) +
+  labs(
+    title = "Average Health and Sanitation Conditions for Different Countries (2001–2019)",
+    subtitle = "Clustered by Health Indicators: Life Expectancy, Health Expenditure, Sanitation, Undernourishment",
+    x = paste0("PC1 (", pc1_var, "%)"),
+    y = paste0("PC2 (", pc2_var, "%)")
+  ) +
+  scale_color_manual(values = c("1" = "#1b9e77", "2" = "#1F78B4", "3" = "#E31A1C")) +
+  theme_minimal()
+```
+
+## PCA-summary
+
+```{r,echo=FALSE,message=FALSE,warning=FALSE}
+pca_summary <- summary(pca)
+print(pca_summary$importance[, 1:2])
+```
+
+##
+2. Regression Analysis: Average Life Expectancy vs. Average Health Expenditure (2001–2019)
+
+```{r,echo=FALSE,message=FALSE,warning=FALSE}
+## Group by countries, and calculate each countries' the total average life expectancy and average health       expenditure from 2001 to 2019
+total_avg_health_expenditure <- data %>%
+  group_by(Country.Name) %>%
+  summarise(
+    avg_life_expectancy = mean(Life.Expectancy.World.Bank),
+    avg_health_expenditure = mean(Health.Expenditure..)
+  )
+
+R1 <- cor(total_avg_health_expenditure$avg_health_expenditure,
+         total_avg_health_expenditure$avg_life_expectancy)
+
+ggplot(total_avg_health_expenditure, aes(x = avg_health_expenditure, y = avg_life_expectancy)) +
+  geom_point(size = 2.2, alpha = 0.6, color = "steelblue") +
+  geom_smooth(method = "lm", se = FALSE, color = "red") +
+  geom_text_repel(aes(label = Country.Name), size = 3.5) +
+  labs(
+    title = "Average Health Expenditure vs. Average Life Expectancy (2001–2019)",
+    x = "Average Health Expenditure (% of national GDP)",
+    y = "Average Life Expectancy (Year)") +
+  annotate("text", 
+    x = Inf, y = Inf, 
+    hjust = 1, vjust = 1,
+    label = paste0("r = ", round(R1, 3)), 
+    size = 5, color = "black") +
+  theme_minimal()
+```
+
+
+```{r,echo=FALSE,message=FALSE,warning=FALSE}
+library(broom)
+model <- lm(avg_life_expectancy ~ avg_health_expenditure, data = total_avg_health_expenditure)
+tidy(model)
+```
+
+
+
+##
+3.GAM: Average Life Expectancy vs. Average Health Expenditure (2001–2019)
+ 
+```{r,echo=FALSE,message=FALSE,warning=FALSE}
+avg_sanitation <- data %>%
+  group_by(Country.Name) %>%
+  summarise(
+    avg_life_expectancy = mean(Life.Expectancy.World.Bank),
+    avg_sanitation = mean(Sanitation)
+  )
+
+ggplot(avg_sanitation, aes(x = avg_sanitation, y = avg_life_expectancy)) +
+  geom_point(size = 2.2, alpha = 0.6, color = "steelblue") +
+  geom_smooth(method = "gam", formula = y ~ s(x), se = FALSE, color = "blue") +
+  geom_text_repel(aes(label = Country.Name), size = 2.5) +
+  labs(
+    title = "Average Sanitation vs. Average Life Expectancy (2001–2019)",
+    subtitle = "Blue = GAM",
+    x = "Average Access to Sanitation (% of population)",
+    y = "Average Life Expectancy (Years)"
+  ) +
+  theme_minimal()
+
+```
+
+
+
+```{r,echo=FALSE,message=FALSE,warning=FALSE}
+library(mgcv)
+
+model_gam <- gam(avg_life_expectancy ~ s(avg_sanitation), data = avg_sanitation)
+
+gam_summary <- tidy(model_gam, parametric = FALSE)
+gam_summary
+```
+
+
+
+##  
+4. Final Model-Map Model: Global Health Map of Nagative Avg Inverted Burden (2001-2019)
+
+```{r,echo=FALSE,message=FALSE,warning=FALSE}
+# calculate Health Burden Calculation
+df <- data %>%
+  mutate(
+    Total_Burden = Injuries + Communicable + NonCommunicable) %>%
+  group_by(Country.Code, Year, Country.Name) 
+  
+# calculate Average Burden (2001–2019) of each country
+avg_burden <- df %>%
+  filter(Year >= 2001, Year <= 2019) %>%
+  group_by(Country.Code, Country.Name) %>%
+  summarise(Average_Burden = mean(Total_Burden, na.rm = TRUE), .groups = "drop")
+
+# Load world map
+world <- ne_countries(returnclass = "sf")
+
+# Merge map data with value
+map_data <- left_join(world, avg_burden, by = c("iso_a3" = "Country.Code"))
+
+# change to negative Total_Burden
+map_data$Neg_Burden <- -map_data$Average_Burden
+
+# plot Green inverse map (the greener the healthier)
+ggplot(map_data) +
+  geom_sf(aes(fill = Neg_Burden), color = "white", size = 0.1) +
+  scale_fill_gradient(
+    low = "#f7fcf5",   
+    high = "#006d2c",  
+    name = "Inverted Avg Burden\n(–Avg Total Burden)"
+  ) +
+  labs(
+    title = "Global Health Map (2001–2019 Avg Inverted Burden)",
+    subtitle = "Darker green = Healthier countries (lower average burden)",
+    caption = "Data source: life_cleaned.csv"
+  ) +
+  theme_minimal()
+```
+
+
+
+## 
+5. Final Model-MAP Model: Average Health Expenditure by Country (2001–2019)
+
+```{r,echo=FALSE,message=FALSE,warning=FALSE}
+# Step 1: Calculate mean health expenditure per country from 2001 to 2019
+health_total <- data %>%
+  filter(Year >= 2001, Year <= 2019) %>%
+  group_by(Country.Code, Country.Name) %>%
+  summarise(Avg_Health_Spending = mean(Health.Expenditure.., na.rm = TRUE), .groups = "drop")
+
+# Step 2: Load world map
+world <- ne_countries(returnclass = "sf")
+
+# Step 3: Merge map data with health expenditure
+map_data <- left_join(world, health_total, by = c("iso_a3" = "Country.Code"))
+
+# Step 4: Plot the map (orange gradient)
+ggplot(map_data) +
+  geom_sf(aes(fill = Avg_Health_Spending), color = "white", size = 0.1) +
+  scale_fill_gradient(
+    low = "#fff5eb",   
+    high = "#d94801", 
+    name = "Avergae Health Expenditure\n(2001–2019)",
+    labels = label_number(suffix = " %") 
+  ) +
+  labs(
+    title = "Average Health Expenditure by Country (2001–2019)",
+    subtitle = "Darker orange = Higher total health spending",
+    caption = "Data source: life_cleaned.csv"
+  ) + theme_minimal()
+```
+
+
+
+
+## Conclusion
+
+- Health expenditure and access to sanitation are both positively associated with life expectancy across countries.
+
+- Higher health spending is also linked to lower disease burdens.
+
+- Exceptions：the U.S. show high spending but only moderate life expectancy and health index.
+
+
+## References
+
+1. Soumikniloy, “Life expectancy & Socio-Economic (world bank),” Kaggle.com, Sep. 13, 2023. https://www.kaggle.com/code/soumikniloy/life-expectancy-socio-economic-world-bank.
+
+2. “World Bank Group,” Federal Ministry for Economic Cooperation and Development. https://www.bmz.de/en/ministry/international-organisations/world-bank-group
+
+## Thank You for Listening!
+
+
+
+
+
